@@ -1,0 +1,56 @@
+_format_version: "3.0"
+_transform: true
+
+services:
+  - name: user-service
+    url: http://user-service.user-service.svc.cluster.local:8000
+    routes:
+      - name: login-route
+        paths:
+          - /login
+        methods:
+          - POST
+        strip_path: false
+      - name: verify-route
+        paths:
+          - /verify
+        methods:
+          - GET
+          - HEAD
+        strip_path: false
+      - name: users-route
+        paths:
+          - /users
+        methods:
+          - GET
+        strip_path: false
+        plugins:
+          - name: jwt
+            config:
+              secret_is_base64: false
+              key_claim_name: iss
+      - name: health-route
+        paths:
+          - /health
+        methods:
+          - GET
+          - HEAD
+        strip_path: false
+
+plugins:
+  - name: rate-limiting
+    config:
+      minute: 10
+      policy: local
+  - name: ip-restriction
+    config:
+      allow:
+        - 0.0.0.0/0 # Open for initial testing, CIDR should be configurable in production
+  - name: custom-header
+    # This refers to the custom lua plugin name
+
+consumers:
+  - username: platform-user
+    jwt_secrets:
+      - key: kong-issuer
+        secret: super-secret-key

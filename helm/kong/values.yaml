@@ -1,0 +1,28 @@
+deployment:
+  kong:
+    enabled: true
+  # Loading custom Lua plugin via ConfigMap
+  user_plugins:
+    - custom-header
+
+env:
+  database: "off"
+  declarative_config: "/kong_config/kong.yaml"
+  plugins: "bundled,custom-header"
+  proxy_access_log: /dev/stdout
+  admin_access_log: /dev/stdout
+
+ingressController:
+  enabled: false
+
+# Mounting the declarative config and custom plugin
+extraConfigMaps:
+  - name: kong-declarative-config
+    mountPath: /kong_config
+  - name: kong-plugin-custom-header
+    mountPath: /opt/kong/plugins/custom-header
+
+# Since we are using Kind, we might want to use NodePort or just port-forward
+# But for now, we'll stick to a standard LoadBalancer for the proxy
+proxy:
+  type: LoadBalancer

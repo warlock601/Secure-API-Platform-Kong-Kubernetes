@@ -1,117 +1,114 @@
-# Secure-API-Platform-Kong-Kubernetes
+# Secure API Platform with Kong on Kubernetes
 
-
-## Secure API Platform with Kong on Kubernetes
-
-This repository contains a complete implementation of a secure API platform using Kong Gateway (DB-less mode) and a Python microservice, designed to run on Kubernetes.
+This repository implements a secure internal API platform using Kong Gateway (OSS), a FastAPI microservice, and Kubernetes (Kind).
 
 ## Architecture Overview
 
-The system consists of two main components running in Kubernetes:
-1.  **Kong Gateway**: Acts as the single entry point (Ingress). It handles Authentication (JWT), Traffic Control (Rate Limiting, IP Whitelisting), and Routing.
-2.  **User Microservice**: A Python Flask application using SQLite. It processes business logic and data persistence.
+The system consists of:
+- **Kong Gateway (OSS)**: Serving as the entry point for all API traffic.
+- **User Microservice**: A FastAPI application managing user records and JWT tokens.
+- **SQLite Database**: Local, file-based storage for user credentials and hashes.
+- **CrowdSec**: Self-managed DDoS protection monitoring Kong logs.
 
 ### API Request Flow
+`Client -> Kong Gateway (Plugins Applied) -> User Microservice (FastAPI)`
 
-`Client -> Kong Gateway -> [Auth & Plugins] -> User Microservice`
+- **Authentication**: JWT-based via Kong's JWT plugin.
+- **Rate Limiting**: IP-based rate limiting (10 requests/min).
+- **IP Protection**: CIDR-based IP restriction.
+- **Custom Logic**: Custom Lua plugin for request header injection (`X-Custom-Auth-Gateway`).
 
-1.  **Client** makes a request to Kong (e.g., `POST /login`).
-2.  **Kong** matches the route.
-3.  **Kong** executes configured plugins:
-    *   **IP Restriction**: Checks if the client IP is allowed.
-    *   **Rate Limiting**: Checks if the client has exceeded the limit (10 req/min).
-    *   **JWT Auth**: Verifies the token (if the route is protected).
-    *   **Custom Lua**: Injects headers or logs the request.
-4.  If all checks pass, **Kong** proxies the request to the upstream `user-service`.
-5.  **Microservice** handles the request and returns a response.
-6.  **Kong** forwards the response back to the client.
+---
 
-## Authentication Strategy
+## Prerequisites (WSL Ubuntu)
 
-*   **JWT Authentication**: Used for protected endpoints.
-*   **Bypass**: Public endpoints are configured in `kong/kong.yml` to NOT use the JWT plugin.
+- WSL2 (Ubuntu)
+- Docker Desktop with WSL Integration
+- Kind (`curl -Lo ./kind https://kind.sigs.k8s.io/dl/v0.20.0/kind-linux-amd64 && chmod +x ./kind && sudo mv ./kind /usr/local/bin/kind`)
+- Kubectl
+- Helm
+- Terraform
 
-| Endpoint | Method | Auth Required | Description |
-| :--- | :--- | :--- | :--- |
-| `/health` | GET | NO | Health check |
-| `/verify` | GET | NO | Verify token (Manual check) |
-| `/login` | POST | NO (Rate Limited) | Get JWT |
-| `/users` | GET | YES | List users |
+---
 
-## DDoS Protection & Security
+## Deployment Steps (WSL Ubuntu)
 
-We implement a multi-layered defense strategy:
-1.  **Network Layer**: **IP Whitelisting** (Kong `ip-restriction` plugin) blocks all traffic not originating from trusted CIDRs (e.g. `10.0.0.0/8`, `127.0.0.1`).
-2.  **Application Layer**: **Rate Limiting** (Kong `rate-limiting` plugin) limits clients to 10 requests per minute to prevent abuse.
-3.  **Custom Logic**: A custom Lua plugin monitors traffic and provides custom logging/header injection to track processing time and origin.
+### 1. Ensure Kind Cluster is Running
+```bash
+# Verify the cluster exists
+kind get clusters | grep dev-cluster
+```
 
-## Deployment Instructions
+### 2. Infrastructure (Terraform)
+```bash
+cd terraform
+terraform init
+terraform apply -auto-approve
+```
 
-### Prerequisites
-*   Kubernetes Cluster (or Minikube/Kind)
-*   Helm 3
-*   Kubectl
+### 3. Build and Load Microservice
+```bash
+cd ../microservice
+docker build -t user-service:latest .
+kind load docker-image user-service:latest --name dev-cluster
+```
 
-### Steps
+### 4. Deploy Kong Gateway
+```bash
+# Add Kong Helm repo
+helm repo add kong https://charts.konghq.com
+helm repo update
 
-1.  **Build Microservice**:
-    ```bash
-    cd microservice
-    docker build -t user-service:latest .
-    # If using Minikube/Kind, load image: kind load docker-image user-service:latest
-    ```
+# Deploy with custom values and extra manifests
+kubectl apply -f ../k8s/kong-extras.yaml
+helm install kong kong/kong -n kong -f ../helm/kong/values.yaml
+```
 
-2.  **Deploy User Service**:
-    ```bash
-    helm install user-service ./helm/user-service
-    ```
+### 5. Deploy User Microservice
+```bash
+cd ../helm/user-service
+helm install user-service . -n user-service
+```
 
-3.  **Deploy Kong (DB-less)**:
-    We use the official Kong chart with our custom config.
-    First, create the ConfigMap for the declarative config and plugins:
-    ```bash
-    kubectl create configmap kong-dbless-config --from-file=kong.yml=./kong/kong.yml
-    kubectl create configmap kong-custom-plugins --from-file=./kong/plugins
-    ```
+### 6. Deploy DDoS Protection (CrowdSec)
+```bash
+helm repo add crowdsec https://crowdsecurity.github.io/helm-charts
+helm repo update
+helm install crowdsec crowdsec/crowdsec -n kong -f ../helm/crowdsec-values.yaml
+```
 
-    Then install Kong:
-    ```bash
-    helm repo add kong https://charts.konghq.com
-    helm repo update
-    helm install kong kong/kong -f ./helm/kong/values.yaml
-    ```
+---
 
-## Verification & Testing
+## Testing Verification
 
-1.  **Health Check (Public)**:
-    ```bash
-    curl -v http://<KONG_IP>/health
-    # Expected: 200 OK, {"status": "healthy"}
-    ```
+### JWT Authentication
+1. **Login to get token**:
+   ```bash
+   curl -X POST http://localhost:8000/login -H "Content-Type: application/json" -d '{"username": "admin", "password": "admin123"}'
+   ```
+2. **Access protected /users**:
+   ```bash
+   curl -X GET http://localhost:8000/users -H "Authorization: Bearer <TOKEN>"
+   ```
 
-2.  **Login (Get Token)**:
-    ```bash
-    curl -X POST http://<KONG_IP>/login -H "Content-Type: application/json" -d '{"username": "admin", "password": "admin123"}'
-    # Expected: 200 OK, Returns {"token": "..."}
-    ```
+### Authentication Bypass
+- Access /health without token:
+  ```bash
+  curl -X GET http://localhost:8000/health
+  ```
 
-3.  **Access Protected Resource (With Token)**:
-    ```bash
-    TOKEN="<paste_token_here>"
-    curl -H "Authorization: Bearer $TOKEN" http://<KONG_IP>/users
-    # Expected: 200 OK, List of users
-    ```
+### Rate Limiting
+- Run 11+ requests within a minute:
+  ```bash
+  for i in {1..12}; do curl -I http://localhost:8000/health; done
+  ```
+  Expected: One or more requests should return `429 Too Many Requests`.
 
-4.  **Access Protected Resource (No Token)**:
-    ```bash
-    curl -v http://<KONG_IP>/users
-    # Expected: 401 Unauthorized
-    ```
+### IP Whitelisting
+- Modify `kong.yaml` to restrict to a specific IP and re-apply. Traffic from other IPs should be blocked (403 Forbidden).
 
-5.  **Test Rate Limiting**:
-    Run the login command 11 times in rapid succession.
-    # Expected: On the 11th try, 429 Too Many Requests.
-
-6.  **Test IP Whitelisting**:
-    Modify `kong/kong.yml` to exclude your IP, apply changes (update ConfigMap & restart Kong), and request again.
-    # Expected: 403 Forbidden.
+### DDoS Protection
+- Check CrowdSec alerts:
+  ```bash
+  kubectl exec -it <crowdsec-lapi-pod> -n kong -- cscli alerts list
+  ```

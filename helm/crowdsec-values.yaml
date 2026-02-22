@@ -1,0 +1,19 @@
+# CrowdSec Helm values for Kubernetes
+container_runtime: containerd
+
+# Enable the LAPI (Local API)
+lapi:
+  enabled: true
+  # Registering the bouncer (Kong)
+  # You might need to manually generate a token after deployment or use a pre-shared secret
+  env:
+    - name: BOUNCER_KEY_KONG
+      value: "super-secret-bouncer-key"
+
+# Enable the agent to monitor logs
+agent:
+  enabled: true
+  acquisition:
+    - namespace: kong
+      podName: kong-*
+      program: kong

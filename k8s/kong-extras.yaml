@@ -1,0 +1,92 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kong-declarative-config
+  namespace: kong
+data:
+  kong.yaml: |
+    _format_version: "3.0"
+    _transform: true
+
+    services:
+      - name: user-service
+        url: http://user-service.user-service.svc.cluster.local:8000
+        routes:
+          - name: login-route
+            paths:
+              - /login
+            methods:
+              - POST
+            strip_path: false
+          - name: verify-route
+            paths:
+              - /verify
+            methods:
+              - GET
+              - HEAD
+            strip_path: false
+          - name: users-route
+            paths:
+              - /users
+            methods:
+              - GET
+            strip_path: false
+            plugins:
+              - name: jwt
+                config:
+                  secret_is_base64: false
+                  key_claim_name: iss
+          - name: health-route
+            paths:
+              - /health
+            methods:
+              - GET
+              - HEAD
+            strip_path: false
+
+    plugins:
+      - name: rate-limiting
+        config:
+          minute: 10
+          policy: local
+      - name: ip-restriction
+        config:
+          allow:
+            - 0.0.0.0/0
+      - name: custom-header
+
+    consumers:
+      - username: platform-user
+        jwt_secrets:
+          - key: kong-issuer
+            secret: super-secret-key
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kong-plugin-custom-header
+  namespace: kong
+data:
+  handler.lua: |
+    local CustomHeaderHandler = {
+      PRIORITY = 1000,
+      VERSION = "0.1",
+    }
+
+    function CustomHeaderHandler:access(conf)
+      kong.service.request.set_header("X-Custom-Auth-Gateway", "Kong-OSS")
+    end
+
+    return CustomHeaderHandler
+  schema.lua: |
+    return {
+      name = "custom-header",
+      fields = {
+        { config = {
+            type = "record",
+            fields = {},
+          },
+        },
+      }
+    }
